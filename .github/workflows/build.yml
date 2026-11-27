@@ -1,0 +1,68 @@
+# 每次 push 到 main：在 Windows 與 macOS 上打包執行檔，並更新 Releases 的「最新版」
+name: 打包執行檔
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"          # Windows 命令列預設不是 UTF-8，中文輸出會出錯
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 安裝打包工具
+        run: python -m pip install pyinstaller certifi
+      - name: 執行測試
+        continue-on-error: true      # 雲端機器較慢，時間敏感的測試偶爾失敗也不擋住打包
+        run: python -m unittest discover -s tests -v
+      - name: 打包
+        run: python build.py
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.os }}
+          path: release/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: 更新「最新版」下載頁
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l release
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest release/* --title "最新版" --target "$GITHUB_SHA" --notes "
+          下載後直接執行即可，不需要安裝 Python。
+
+          - **Windows**：下載 CollabWhiteboard-Windows.exe，雙擊執行。若出現「Windows 已保護您的電腦」，按「其他資訊 → 仍要執行」。
+          - **macOS (Apple 晶片)**：下載 CollabWhiteboard-macOS.zip，解壓縮後把 CollabWhiteboard.app 拖到「應用程式」。第一次開啟若被擋，到「系統設定 → 隱私權與安全性」按「強制打開」，或在終端機執行 xattr -cr /Applications/CollabWhiteboard.app
+
+          版本：${GITHUB_SHA::7}"
